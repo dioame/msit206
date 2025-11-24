@@ -1,0 +1,6 @@
+vendor/
+uploads/
+csv_output/
+.env
+*.log
+
