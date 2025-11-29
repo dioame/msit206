@@ -7,8 +7,53 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 20px;
+            margin: 0;
             background: #fff;
+        }
+
+        .navbar {
+            background: #007bff;
+            color: white;
+            padding: 15px 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .navbar h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            transition: background 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .nav-links a.active {
+            background: rgba(255,255,255,0.3);
         }
 
         .container {
@@ -200,6 +245,17 @@
     </style>
 </head>
 <body>
+    <nav class="navbar">
+        <div class="navbar-content">
+            <h2>Disaster Data Management System</h2>
+            <ul class="nav-links">
+                <li><a href="index.php" class="active">Import Excel</a></li>
+                <li><a href="crud_interface.php">Manage Data</a></li>
+                <li><a href="dashboard.php">Dashboard</a></li>
+                <li><a href="mining.php">Data Mining</a></li>
+            </ul>
+        </div>
+    </nav>
     <div class="container">
         <div class="header">
             <h1>Excel to CSV Converter</h1>
