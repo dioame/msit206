@@ -39,28 +39,29 @@ function getDBConnection() {
     }
 }
 
-// Apriori Algorithm Implementation
+// Apriori Algorithm Implementation with Database-Optimized Calculations
 class AprioriMining {
-    private $transactions;
+    private $conn;
+    private $totalTransactions;
     private $minSupport;
     private $minConfidence;
     private $minLift;
     
-    public function __construct($transactions, $minSupport = 0.1, $minConfidence = 0.6, $minLift = 1.2) {
-        $this->transactions = $transactions;
+    public function __construct($conn, $totalTransactions, $minSupport = 0.1, $minConfidence = 0.6, $minLift = 1.2) {
+        $this->conn = $conn;
+        $this->totalTransactions = $totalTransactions;
         $this->minSupport = $minSupport;
         $this->minConfidence = $minConfidence;
         $this->minLift = $minLift;
     }
     
-    // Get frequent itemsets
+    // Get frequent itemsets using database calculations
     public function getFrequentItemsets() {
         $frequentItemsets = [];
         $k = 1;
         
-        // Generate 1-itemsets
-        $candidates = $this->generateCandidates1();
-        $frequent = $this->filterFrequent($candidates);
+        // Generate 1-itemsets using SQL
+        $frequent = $this->getFrequent1Itemsets();
         
         if (empty($frequent)) {
             return [];
@@ -72,7 +73,7 @@ class AprioriMining {
         while (!empty($frequent)) {
             $k++;
             $candidates = $this->generateCandidates($frequent, $k);
-            $frequent = $this->filterFrequent($candidates);
+            $frequent = $this->filterFrequentWithDB($candidates);
             
             if (!empty($frequent)) {
                 $frequentItemsets[$k] = $frequent;
@@ -84,18 +85,31 @@ class AprioriMining {
         return $frequentItemsets;
     }
     
-    // Generate 1-itemset candidates
-    private function generateCandidates1() {
-        $items = [];
-        foreach ($this->transactions as $transaction) {
-            foreach ($transaction as $item) {
-                if (!isset($items[$item])) {
-                    $items[$item] = 0;
-                }
-                $items[$item]++;
-            }
+    // Get frequent 1-itemsets using SQL
+    private function getFrequent1Itemsets() {
+        $minCount = ceil($this->totalTransactions * $this->minSupport);
+        
+        $query = "SELECT 
+            fnfi_name as item,
+            COUNT(DISTINCT assistance_id) as count,
+            COUNT(DISTINCT assistance_id) / ? as support
+        FROM assistance
+        GROUP BY fnfi_name
+        HAVING COUNT(DISTINCT assistance_id) >= ?
+        ORDER BY count DESC";
+        
+        $stmt = $this->conn->prepare($query);
+        $stmt->bind_param("di", $this->totalTransactions, $minCount);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $frequent = [];
+        while ($row = $result->fetch_assoc()) {
+            $frequent[$row['item']] = floatval($row['support']);
         }
-        return $items;
+        $stmt->close();
+        
+        return $frequent;
     }
     
     // Generate k-itemset candidates from (k-1)-itemsets
@@ -145,42 +159,57 @@ class AprioriMining {
         return $candidates;
     }
     
-    // Filter frequent itemsets
-    private function filterFrequent($candidates) {
+    // Filter frequent itemsets using database calculations
+    private function filterFrequentWithDB($candidates) {
         $frequent = [];
-        $totalTransactions = count($this->transactions);
+        $minCount = ceil($this->totalTransactions * $this->minSupport);
         
-        foreach ($candidates as $itemset => $count) {
-            $items = is_array($itemset) ? $itemset : explode(',', $itemset);
-            $support = $this->calculateSupport($items);
+        foreach ($candidates as $itemsetStr => $count) {
+            $items = explode(',', $itemsetStr);
+            $support = $this->calculateSupportWithDB($items);
             
             if ($support >= $this->minSupport) {
-                $frequent[implode(',', $items)] = $support;
+                $frequent[$itemsetStr] = $support;
             }
         }
         
         return $frequent;
     }
     
-    // Calculate support for itemset
-    private function calculateSupport($items) {
-        $count = 0;
-        foreach ($this->transactions as $transaction) {
-            $found = true;
-            foreach ($items as $item) {
-                if (!in_array($item, $transaction)) {
-                    $found = false;
-                    break;
-                }
-            }
-            if ($found) {
-                $count++;
-            }
+    // Calculate support for itemset using SQL
+    private function calculateSupportWithDB($items) {
+        if (empty($items)) {
+            return 0;
         }
-        return $count / count($this->transactions);
+        
+        $placeholders = str_repeat('?,', count($items) - 1) . '?';
+        $itemCount = count($items);
+        
+        // Count transactions that contain ALL items in the itemset
+        // Using a more efficient query that directly counts matching transactions
+        $query = "SELECT COUNT(*) as count
+        FROM (
+            SELECT assistance_id
+            FROM assistance
+            WHERE fnfi_name IN ($placeholders)
+            GROUP BY assistance_id
+            HAVING COUNT(DISTINCT fnfi_name) = ?
+        ) as matching_transactions";
+        
+        $stmt = $this->conn->prepare($query);
+        $params = array_merge($items, [$itemCount]);
+        $types = str_repeat('s', count($items)) . 'i';
+        $stmt->bind_param($types, ...$params);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = $result->fetch_assoc();
+        $count = intval($row['count']);
+        $stmt->close();
+        
+        return $count / $this->totalTransactions;
     }
     
-    // Generate association rules
+    // Generate association rules using database calculations
     public function generateRules($frequentItemsets) {
         $rules = [];
         
@@ -204,7 +233,7 @@ class AprioriMining {
         return $rules;
     }
     
-    // Generate rules from an itemset
+    // Generate rules from an itemset using database calculations
     private function generateRulesFromItemset($items, $itemsetSupport, &$rules) {
         $n = count($items);
         
@@ -217,8 +246,9 @@ class AprioriMining {
                 
                 if (empty($consequent)) continue;
                 
-                $antecedentSupport = $this->calculateSupport($antecedent);
-                $consequentSupport = $this->calculateSupport($consequent);
+                // Calculate support using database
+                $antecedentSupport = $this->calculateSupportWithDB($antecedent);
+                $consequentSupport = $this->calculateSupportWithDB($consequent);
                 
                 if ($antecedentSupport == 0) continue;
                 
@@ -263,30 +293,26 @@ class AprioriMining {
 try {
     $conn = getDBConnection();
     
-    // Get assistance data grouped by assistance_id (transaction)
-    $query = "SELECT 
-        a.assistance_id,
-        GROUP_CONCAT(DISTINCT a.fnfi_name ORDER BY a.fnfi_name SEPARATOR ',') as items
-    FROM assistance a
-    GROUP BY a.assistance_id
-    HAVING COUNT(DISTINCT a.fnfi_name) > 1";
+    // Get total transaction count using SQL
+    $countQuery = "SELECT COUNT(DISTINCT assistance_id) as total
+    FROM assistance
+    WHERE assistance_id IN (
+        SELECT assistance_id
+        FROM assistance
+        GROUP BY assistance_id
+        HAVING COUNT(DISTINCT fnfi_name) > 1
+    )";
     
-    $result = $conn->query($query);
-    
-    if (!$result) {
-        throw new Exception("Query failed: " . $conn->error);
+    $countResult = $conn->query($countQuery);
+    if (!$countResult) {
+        throw new Exception("Count query failed: " . $conn->error);
     }
     
-    // Prepare transactions
-    $transactions = [];
-    while ($row = $result->fetch_assoc()) {
-        $items = explode(',', $row['items']);
-        $transactions[] = array_map('trim', $items);
-    }
+    $countRow = $countResult->fetch_assoc();
+    $totalTransactions = intval($countRow['total']);
     
-    $conn->close();
-    
-    if (empty($transactions)) {
+    if ($totalTransactions == 0) {
+        $conn->close();
         ob_end_clean();
         echo json_encode([
             'success' => false,
@@ -300,10 +326,12 @@ try {
     $minConfidence = isset($_GET['min_confidence']) ? floatval($_GET['min_confidence']) : 0.6;
     $minLift = isset($_GET['min_lift']) ? floatval($_GET['min_lift']) : 1.2;
     
-    // Run Apriori algorithm
-    $apriori = new AprioriMining($transactions, $minSupport, $minConfidence, $minLift);
+    // Run Apriori algorithm with database-optimized calculations
+    $apriori = new AprioriMining($conn, $totalTransactions, $minSupport, $minConfidence, $minLift);
     $frequentItemsets = $apriori->getFrequentItemsets();
     $rules = $apriori->generateRules($frequentItemsets);
+    
+    $conn->close();
     
     // Format rules for display
     $formattedRules = [];
@@ -345,7 +373,7 @@ try {
         'success' => true,
         'data' => $formattedRules,
         'stats' => [
-            'total_transactions' => count($transactions),
+            'total_transactions' => $totalTransactions,
             'total_rules' => count($formattedRules),
             'min_support' => $minSupport,
             'min_confidence' => $minConfidence,
