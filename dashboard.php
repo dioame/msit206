@@ -166,6 +166,7 @@
                 <li><a href="crud_interface.php">Manage Data</a></li>
                 <li><a href="dashboard.php" class="active">Dashboard</a></li>
                 <li><a href="mining.php">Data Mining</a></li>
+                <li><a href="logs.php">Activity Logs</a></li>
             </ul>
         </div>
     </nav>
@@ -256,7 +257,7 @@
     </div>
 
     <script>
-        const API_BASE = 'backend/crud.php';
+        const DASHBOARD_API = 'backend/dashboard.php';
 
         // Format number with commas
         function formatNumber(num) {
@@ -274,44 +275,70 @@
             container.innerHTML = `<div class="error">${message}</div>`;
         }
 
-        // Fetch data from API
-        async function fetchTableData(table) {
+        // Fetch view data from dashboard API
+        async function fetchViewData(view) {
             try {
-                const response = await fetch(`${API_BASE}?table=${table}&limit=10000`);
+                const response = await fetch(`${DASHBOARD_API}?view=${view}`);
                 const result = await response.json();
                 if (result.success) {
                     return result.data;
                 }
+                return null;
+            } catch (error) {
+                console.error(`Error fetching view ${view}:`, error);
+                return null;
+            }
+        }
+
+        // Fetch view data with pagination (returns array)
+        async function fetchViewDataList(view, limit = 1000) {
+            try {
+                const response = await fetch(`${DASHBOARD_API}?view=${view}&limit=${limit}`);
+                const result = await response.json();
+                if (result.success) {
+                    return result.data || [];
+                }
                 return [];
             } catch (error) {
-                console.error(`Error fetching ${table}:`, error);
+                console.error(`Error fetching view ${view}:`, error);
                 return [];
             }
         }
 
-        // Load all dashboard data
+        // Load all dashboard data using views
         async function loadDashboardData() {
             try {
-                const [incidents, affected, assistance, evacuation, provinces, municipalities] = await Promise.all([
-                    fetchTableData('incidents'),
-                    fetchTableData('affected'),
-                    fetchTableData('assistance'),
-                    fetchTableData('evacuation'),
-                    fetchTableData('provinces'),
-                    fetchTableData('municipalities')
+                // Fetch all data in parallel using dashboard API
+                const [
+                    dashboardStats,
+                    disasterTypes,
+                    provinceStats,
+                    municipalityStats,
+                    timeline,
+                    assistanceSummary,
+                    evacuationSummary
+                ] = await Promise.all([
+                    fetchViewData('view_dashboard_stats'),
+                    fetchViewDataList('view_disaster_type_summary'),
+                    fetchViewDataList('view_province_stats'),
+                    fetchViewDataList('view_municipality_stats'),
+                    fetchViewDataList('view_disaster_timeline'),
+                    fetchViewDataList('view_assistance_summary'),
+                    fetchViewDataList('view_evacuation_summary')
                 ]);
 
-                // Calculate statistics
-                const stats = calculateStatistics(incidents, affected, assistance, evacuation);
-                updateStatistics(stats);
+                // Update statistics from view
+                if (dashboardStats) {
+                    updateStatistics(dashboardStats);
+                }
 
-                // Create charts
-                createDisasterTypeChart(incidents);
-                createProvinceChart(affected, provinces, municipalities);
-                createTimelineChart(incidents);
-                createAssistanceChart(assistance);
-                createEvacuationChart(evacuation);
-                createMunicipalityChart(affected, municipalities);
+                // Create charts using view data
+                createDisasterTypeChart(disasterTypes);
+                createProvinceChart(provinceStats);
+                createTimelineChart(timeline);
+                createAssistanceChart(assistanceSummary);
+                createEvacuationChart(evacuationSummary, dashboardStats);
+                createMunicipalityChart(municipalityStats);
 
                 // Hide loading, show content
                 document.getElementById('loading').style.display = 'none';
@@ -323,45 +350,24 @@
             }
         }
 
-        // Calculate statistics
-        function calculateStatistics(incidents, affected, assistance, evacuation) {
-            const totalIncidents = incidents.length;
-            const totalAffected = affected.reduce((sum, a) => sum + (a.person_no || 0), 0);
-            const totalFamilies = affected.reduce((sum, a) => sum + (a.fam_no || 0), 0);
-            const totalAssistance = assistance.length;
-            const totalEvacuation = evacuation.length;
-            const totalAmount = assistance.reduce((sum, a) => sum + parseFloat(a.total_amount || 0), 0);
-
-            return {
-                totalIncidents,
-                totalAffected,
-                totalFamilies,
-                totalAssistance,
-                totalEvacuation,
-                totalAmount
-            };
-        }
-
         // Update statistics cards
         function updateStatistics(stats) {
-            document.getElementById('total-incidents').textContent = formatNumber(stats.totalIncidents);
-            document.getElementById('total-affected').textContent = formatNumber(stats.totalAffected);
-            document.getElementById('total-families').textContent = formatNumber(stats.totalFamilies);
-            document.getElementById('total-assistance').textContent = formatNumber(stats.totalAssistance);
-            document.getElementById('total-evacuation').textContent = formatNumber(stats.totalEvacuation);
-            document.getElementById('total-amount').textContent = formatCurrency(stats.totalAmount);
+            document.getElementById('total-incidents').textContent = formatNumber(stats.total_incidents || 0);
+            document.getElementById('total-affected').textContent = formatNumber(stats.total_affected || 0);
+            document.getElementById('total-families').textContent = formatNumber(stats.total_families || 0);
+            document.getElementById('total-assistance').textContent = formatNumber(stats.total_assistance || 0);
+            document.getElementById('total-evacuation').textContent = formatNumber(stats.total_evacuation || 0);
+            document.getElementById('total-amount').textContent = formatCurrency(stats.total_amount || 0);
         }
 
         // Create Disaster Type Chart
-        function createDisasterTypeChart(incidents) {
-            const disasterCounts = {};
-            incidents.forEach(incident => {
-                const name = incident.disaster_name || 'Unknown';
-                disasterCounts[name] = (disasterCounts[name] || 0) + 1;
-            });
+        function createDisasterTypeChart(disasterTypes) {
+            if (!disasterTypes || disasterTypes.length === 0) {
+                return;
+            }
 
-            const labels = Object.keys(disasterCounts);
-            const data = Object.values(disasterCounts);
+            const labels = disasterTypes.map(d => d.disaster_name || 'Unknown');
+            const data = disasterTypes.map(d => d.incident_count || 0);
 
             new Chart(document.getElementById('disasterTypeChart'), {
                 type: 'doughnut',
@@ -388,37 +394,22 @@
         }
 
         // Create Province Chart
-        function createProvinceChart(affected, provinces, municipalities) {
-            const provinceMap = {};
-            provinces.forEach(p => {
-                provinceMap[p.provinceid] = p.province_name;
-            });
+        function createProvinceChart(provinceStats) {
+            if (!provinceStats || provinceStats.length === 0) {
+                return;
+            }
 
-            const municipalityMap = {};
-            municipalities.forEach(m => {
-                municipalityMap[m.municipality_id] = m.provinceid;
-            });
-
-            const provinceCounts = {};
-            affected.forEach(a => {
-                const provinceId = municipalityMap[a.municipality_id];
-                if (provinceId) {
-                    const provinceName = provinceMap[provinceId] || 'Unknown';
-                    provinceCounts[provinceName] = (provinceCounts[provinceName] || 0) + (a.person_no || 0);
-                }
-            });
-
-            const sorted = Object.entries(provinceCounts)
-                .sort((a, b) => b[1] - a[1])
+            const sorted = provinceStats
+                .sort((a, b) => (b.total_affected_persons || 0) - (a.total_affected_persons || 0))
                 .slice(0, 10);
 
             new Chart(document.getElementById('provinceChart'), {
                 type: 'bar',
                 data: {
-                    labels: sorted.map(s => s[0]),
+                    labels: sorted.map(p => p.province_name || 'Unknown'),
                     datasets: [{
                         label: 'Affected Persons',
-                        data: sorted.map(s => s[1]),
+                        data: sorted.map(p => p.total_affected_persons || 0),
                         backgroundColor: '#36A2EB'
                     }]
                 },
@@ -440,27 +431,18 @@
         }
 
         // Create Timeline Chart
-        function createTimelineChart(incidents) {
-            const monthCounts = {};
-            incidents.forEach(incident => {
-                if (incident.disaster_date) {
-                    const date = new Date(incident.disaster_date);
-                    const month = date.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
-                    monthCounts[month] = (monthCounts[month] || 0) + 1;
-                }
-            });
-
-            const sorted = Object.entries(monthCounts).sort((a, b) => {
-                return new Date(a[0]) - new Date(b[0]);
-            });
+        function createTimelineChart(timeline) {
+            if (!timeline || timeline.length === 0) {
+                return;
+            }
 
             new Chart(document.getElementById('timelineChart'), {
                 type: 'line',
                 data: {
-                    labels: sorted.map(s => s[0]),
+                    labels: timeline.map(t => t.month_label || t.month_year || ''),
                     datasets: [{
                         label: 'Number of Disasters',
-                        data: sorted.map(s => s[1]),
+                        data: timeline.map(t => t.incident_count || 0),
                         borderColor: '#FF6384',
                         backgroundColor: 'rgba(255, 99, 132, 0.1)',
                         tension: 0.4
@@ -479,23 +461,21 @@
         }
 
         // Create Assistance Chart
-        function createAssistanceChart(assistance) {
-            const itemCounts = {};
-            assistance.forEach(a => {
-                const item = a.fnfi_name || 'Unknown';
-                itemCounts[item] = (itemCounts[item] || 0) + (a.quantity || 0);
-            });
+        function createAssistanceChart(assistanceSummary) {
+            if (!assistanceSummary || assistanceSummary.length === 0) {
+                return;
+            }
 
-            const sorted = Object.entries(itemCounts)
-                .sort((a, b) => b[1] - a[1])
+            const sorted = assistanceSummary
+                .sort((a, b) => (b.total_quantity || 0) - (a.total_quantity || 0))
                 .slice(0, 8);
 
             new Chart(document.getElementById('assistanceChart'), {
                 type: 'pie',
                 data: {
-                    labels: sorted.map(s => s[0]),
+                    labels: sorted.map(a => a.fnfi_name || 'Unknown'),
                     datasets: [{
-                        data: sorted.map(s => s[1]),
+                        data: sorted.map(a => a.total_quantity || 0),
                         backgroundColor: [
                             '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
                             '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
@@ -515,11 +495,23 @@
         }
 
         // Create Evacuation Chart
-        function createEvacuationChart(evacuation) {
-            const totalEC = evacuation.reduce((sum, e) => sum + (e.ec_cum || 0), 0);
-            const totalECNow = evacuation.reduce((sum, e) => sum + (e.ec_now || 0), 0);
-            const totalFamily = evacuation.reduce((sum, e) => sum + (e.family_cum || 0), 0);
-            const totalPerson = evacuation.reduce((sum, e) => sum + (e.person_cum || 0), 0);
+        function createEvacuationChart(evacuationSummary, dashboardStats) {
+            // Use dashboard stats if available, otherwise calculate from summary
+            let totalEC, totalECNow, totalFamily, totalPerson;
+            
+            if (dashboardStats) {
+                totalEC = dashboardStats.total_ec_cum || 0;
+                totalECNow = dashboardStats.total_ec_now || 0;
+                totalFamily = dashboardStats.total_family_cum || 0;
+                totalPerson = dashboardStats.total_person_cum || 0;
+            } else if (evacuationSummary && evacuationSummary.length > 0) {
+                totalEC = evacuationSummary.reduce((sum, e) => sum + (e.total_ec_cum || 0), 0);
+                totalECNow = evacuationSummary.reduce((sum, e) => sum + (e.total_ec_now || 0), 0);
+                totalFamily = evacuationSummary.reduce((sum, e) => sum + (e.total_family_cum || 0), 0);
+                totalPerson = evacuationSummary.reduce((sum, e) => sum + (e.total_person_cum || 0), 0);
+            } else {
+                totalEC = totalECNow = totalFamily = totalPerson = 0;
+            }
 
             new Chart(document.getElementById('evacuationChart'), {
                 type: 'bar',
@@ -549,29 +541,22 @@
         }
 
         // Create Municipality Chart
-        function createMunicipalityChart(affected, municipalities) {
-            const municipalityMap = {};
-            municipalities.forEach(m => {
-                municipalityMap[m.municipality_id] = m.municipality_name;
-            });
+        function createMunicipalityChart(municipalityStats) {
+            if (!municipalityStats || municipalityStats.length === 0) {
+                return;
+            }
 
-            const municipalityCounts = {};
-            affected.forEach(a => {
-                const municipalityName = municipalityMap[a.municipality_id] || 'Unknown';
-                municipalityCounts[municipalityName] = (municipalityCounts[municipalityName] || 0) + (a.person_no || 0);
-            });
-
-            const sorted = Object.entries(municipalityCounts)
-                .sort((a, b) => b[1] - a[1])
+            const sorted = municipalityStats
+                .sort((a, b) => (b.total_affected_persons || 0) - (a.total_affected_persons || 0))
                 .slice(0, 10);
 
             new Chart(document.getElementById('municipalityChart'), {
                 type: 'bar',
                 data: {
-                    labels: sorted.map(s => s[0]),
+                    labels: sorted.map(m => m.municipality_name || 'Unknown'),
                     datasets: [{
                         label: 'Affected Persons',
-                        data: sorted.map(s => s[1]),
+                        data: sorted.map(m => m.total_affected_persons || 0),
                         backgroundColor: '#FF9F40'
                     }]
                 },

@@ -313,9 +313,294 @@ function createDatabaseSchema($conn) {
             FOREIGN KEY (`affected_id`) REFERENCES `affected`(`affected_id`) ON DELETE CASCADE ON UPDATE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
         
+        // Create logs table for audit trail
+        $queries[] = "CREATE TABLE IF NOT EXISTS `logs` (
+            `log_id` INT(11) NOT NULL AUTO_INCREMENT,
+            `table_name` VARCHAR(100) NOT NULL,
+            `operation_type` ENUM('UPDATE', 'DELETE') NOT NULL,
+            `record_id` VARCHAR(100) NOT NULL,
+            `old_data` JSON DEFAULT NULL,
+            `new_data` JSON DEFAULT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`log_id`),
+            INDEX `idx_table_name` (`table_name`),
+            INDEX `idx_operation_type` (`operation_type`),
+            INDEX `idx_created_at` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+        
         foreach ($queries as $query) {
             if (!$conn->query($query)) {
                 $errors[] = "Error creating table: " . $conn->error;
+            }
+        }
+        
+        // Create views if they don't exist
+        logMessage("Creating database views");
+        $viewResult = createDatabaseViews($conn);
+        if (!$viewResult['success']) {
+            logMessage("View creation errors", $viewResult['errors']);
+            $errors = array_merge($errors, $viewResult['errors']);
+        } else {
+            logMessage("Database views created successfully");
+        }
+        
+        // Create triggers for logging
+        logMessage("Creating database triggers");
+        $triggerResult = createDatabaseTriggers($conn);
+        if (!$triggerResult['success']) {
+            logMessage("Trigger creation errors", $triggerResult['errors']);
+            $errors = array_merge($errors, $triggerResult['errors']);
+        } else {
+            logMessage("Database triggers created successfully");
+        }
+        
+        return [
+            'success' => count($errors) === 0,
+            'errors' => $errors
+        ];
+        
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'errors' => [$e->getMessage()]
+        ];
+    }
+}
+
+// Create database views for dashboard
+function createDatabaseViews($conn) {
+    $queries = [];
+    $errors = [];
+    
+    try {
+        // View: Dashboard Statistics Summary
+        $queries[] = "CREATE OR REPLACE VIEW `view_dashboard_stats` AS
+            SELECT 
+                (SELECT COUNT(DISTINCT incident_id) FROM incidents) as total_incidents,
+                (SELECT COALESCE(SUM(person_no), 0) FROM affected) as total_affected,
+                (SELECT COALESCE(SUM(fam_no), 0) FROM affected) as total_families,
+                (SELECT COUNT(*) FROM assistance) as total_assistance,
+                (SELECT COUNT(*) FROM evacuation) as total_evacuation,
+                (SELECT COALESCE(SUM(total_amount), 0) FROM assistance) as total_amount,
+                (SELECT COALESCE(SUM(ec_cum), 0) FROM evacuation) as total_ec_cum,
+                (SELECT COALESCE(SUM(ec_now), 0) FROM evacuation) as total_ec_now,
+                (SELECT COALESCE(SUM(family_cum), 0) FROM evacuation) as total_family_cum,
+                (SELECT COALESCE(SUM(person_cum), 0) FROM evacuation) as total_person_cum";
+        
+        // View: Affected Details with Location Names
+        $queries[] = "CREATE OR REPLACE VIEW `view_affected_details` AS
+            SELECT 
+                a.affected_id,
+                a.incident_id,
+                a.municipality_id,
+                a.fam_no,
+                a.person_no,
+                a.brgy_affected,
+                i.disaster_name,
+                i.disaster_date,
+                m.municipality_name,
+                m.provinceid,
+                p.province_name
+            FROM affected a
+            LEFT JOIN incidents i ON a.incident_id = i.incident_id
+            LEFT JOIN municipalities m ON a.municipality_id = m.municipality_id
+            LEFT JOIN provinces p ON m.provinceid = p.provinceid";
+        
+        // View: Province Statistics
+        $queries[] = "CREATE OR REPLACE VIEW `view_province_stats` AS
+            SELECT 
+                p.provinceid,
+                p.province_name,
+                COALESCE(SUM(a.person_no), 0) as total_affected_persons,
+                COALESCE(SUM(a.fam_no), 0) as total_affected_families,
+                COUNT(DISTINCT a.incident_id) as incident_count,
+                COUNT(DISTINCT a.municipality_id) as municipality_count
+            FROM provinces p
+            LEFT JOIN municipalities m ON p.provinceid = m.provinceid
+            LEFT JOIN affected a ON m.municipality_id = a.municipality_id
+            GROUP BY p.provinceid, p.province_name";
+        
+        // View: Municipality Statistics
+        $queries[] = "CREATE OR REPLACE VIEW `view_municipality_stats` AS
+            SELECT 
+                m.municipality_id,
+                m.municipality_name,
+                m.provinceid,
+                p.province_name,
+                COALESCE(SUM(a.person_no), 0) as total_affected_persons,
+                COALESCE(SUM(a.fam_no), 0) as total_affected_families,
+                COUNT(DISTINCT a.incident_id) as incident_count
+            FROM municipalities m
+            LEFT JOIN provinces p ON m.provinceid = p.provinceid
+            LEFT JOIN affected a ON m.municipality_id = a.municipality_id
+            GROUP BY m.municipality_id, m.municipality_name, m.provinceid, p.province_name";
+        
+        // View: Disaster Type Summary
+        $queries[] = "CREATE OR REPLACE VIEW `view_disaster_type_summary` AS
+            SELECT 
+                disaster_name,
+                COUNT(DISTINCT incident_id) as incident_count,
+                MIN(disaster_date) as first_occurrence,
+                MAX(disaster_date) as last_occurrence
+            FROM incidents
+            GROUP BY disaster_name";
+        
+        // View: Disaster Timeline (by month)
+        $queries[] = "CREATE OR REPLACE VIEW `view_disaster_timeline` AS
+            SELECT 
+                DATE_FORMAT(disaster_date, '%Y-%m') as month_year,
+                DATE_FORMAT(disaster_date, '%b %Y') as month_label,
+                COUNT(DISTINCT incident_id) as incident_count,
+                COUNT(DISTINCT disaster_name) as disaster_type_count
+            FROM incidents
+            GROUP BY DATE_FORMAT(disaster_date, '%Y-%m'), DATE_FORMAT(disaster_date, '%b %Y')
+            ORDER BY month_year";
+        
+        // View: Assistance Summary by Item
+        $queries[] = "CREATE OR REPLACE VIEW `view_assistance_summary` AS
+            SELECT 
+                fnfi_name,
+                COUNT(*) as record_count,
+                COALESCE(SUM(quantity), 0) as total_quantity,
+                COALESCE(SUM(cost), 0) as total_cost,
+                COALESCE(SUM(total_amount), 0) as total_amount,
+                AVG(cost) as avg_cost,
+                AVG(quantity) as avg_quantity
+            FROM assistance
+            GROUP BY fnfi_name";
+        
+        // View: Evacuation Summary
+        $queries[] = "CREATE OR REPLACE VIEW `view_evacuation_summary` AS
+            SELECT 
+                evacuation_name,
+                COUNT(*) as center_count,
+                COALESCE(SUM(ec_cum), 0) as total_ec_cum,
+                COALESCE(SUM(ec_now), 0) as total_ec_now,
+                COALESCE(SUM(family_cum), 0) as total_family_cum,
+                COALESCE(SUM(person_cum), 0) as total_person_cum
+            FROM evacuation
+            GROUP BY evacuation_name";
+        
+        foreach ($queries as $index => $query) {
+            if (!$conn->query($query)) {
+                $errorMsg = "Error creating view #" . ($index + 1) . ": " . $conn->error;
+                $errors[] = $errorMsg;
+                logMessage($errorMsg);
+            } else {
+                logMessage("View created successfully", ['index' => $index + 1]);
+            }
+        }
+        
+        return [
+            'success' => count($errors) === 0,
+            'errors' => $errors
+        ];
+        
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'errors' => [$e->getMessage()]
+        ];
+    }
+}
+
+// Create database triggers for logging UPDATE and DELETE operations
+function createDatabaseTriggers($conn) {
+    $errors = [];
+    
+    try {
+        // Define tables and their primary keys
+        $tables = [
+            'provinces' => 'provinceid',
+            'municipalities' => 'municipality_id',
+            'incidents' => 'incident_id',
+            'affected' => 'affected_id',
+            'assistance' => 'id',
+            'evacuation' => 'evacuation_id'
+        ];
+        
+        foreach ($tables as $tableName => $primaryKey) {
+            // Drop existing triggers if they exist
+            $dropUpdateTrigger = "DROP TRIGGER IF EXISTS `trg_{$tableName}_update_log`";
+            $dropDeleteTrigger = "DROP TRIGGER IF EXISTS `trg_{$tableName}_delete_log`";
+            
+            $conn->query($dropUpdateTrigger);
+            $conn->query($dropDeleteTrigger);
+            
+            // Get column names for the table to build JSON object
+            $columnsResult = $conn->query("SHOW COLUMNS FROM `{$tableName}`");
+            $columns = [];
+            while ($col = $columnsResult->fetch_assoc()) {
+                $columns[] = $col['Field'];
+            }
+            
+            // Build JSON object parts for OLD and NEW
+            $oldJsonParts = [];
+            $newJsonParts = [];
+            
+            foreach ($columns as $col) {
+                $escapedCol = $conn->real_escape_string($col);
+                $oldJsonParts[] = "'{$escapedCol}', OLD.`{$col}`";
+                $newJsonParts[] = "'{$escapedCol}', NEW.`{$col}`";
+            }
+            
+            $oldJsonStr = implode(', ', $oldJsonParts);
+            $newJsonStr = implode(', ', $newJsonParts);
+            
+            // Create UPDATE trigger
+            $updateTriggerSQL = "
+            CREATE TRIGGER `trg_{$tableName}_update_log`
+            AFTER UPDATE ON `{$tableName}`
+            FOR EACH ROW
+            BEGIN
+                INSERT INTO `logs` (
+                    `table_name`,
+                    `operation_type`,
+                    `record_id`,
+                    `old_data`,
+                    `new_data`
+                ) VALUES (
+                    '{$tableName}',
+                    'UPDATE',
+                    CAST(OLD.`{$primaryKey}` AS CHAR),
+                    JSON_OBJECT({$oldJsonStr}),
+                    JSON_OBJECT({$newJsonStr})
+                );
+            END";
+            
+            if (!$conn->query($updateTriggerSQL)) {
+                $errors[] = "Error creating UPDATE trigger for {$tableName}: " . $conn->error;
+                logMessage("Trigger creation error", ['table' => $tableName, 'type' => 'UPDATE', 'error' => $conn->error]);
+            } else {
+                logMessage("UPDATE trigger created", ['table' => $tableName]);
+            }
+            
+            // Create DELETE trigger
+            $deleteTriggerSQL = "
+            CREATE TRIGGER `trg_{$tableName}_delete_log`
+            AFTER DELETE ON `{$tableName}`
+            FOR EACH ROW
+            BEGIN
+                INSERT INTO `logs` (
+                    `table_name`,
+                    `operation_type`,
+                    `record_id`,
+                    `old_data`,
+                    `new_data`
+                ) VALUES (
+                    '{$tableName}',
+                    'DELETE',
+                    CAST(OLD.`{$primaryKey}` AS CHAR),
+                    JSON_OBJECT({$oldJsonStr}),
+                    NULL
+                );
+            END";
+            
+            if (!$conn->query($deleteTriggerSQL)) {
+                $errors[] = "Error creating DELETE trigger for {$tableName}: " . $conn->error;
+                logMessage("Trigger creation error", ['table' => $tableName, 'type' => 'DELETE', 'error' => $conn->error]);
+            } else {
+                logMessage("DELETE trigger created", ['table' => $tableName]);
             }
         }
         

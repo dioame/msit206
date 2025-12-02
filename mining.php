@@ -272,6 +272,7 @@
                 <li><a href="crud_interface.php">Manage Data</a></li>
                 <li><a href="dashboard.php">Dashboard</a></li>
                 <li><a href="mining.php" class="active">Data Mining</a></li>
+                <li><a href="logs.php">Activity Logs</a></li>
             </ul>
         </div>
     </nav>

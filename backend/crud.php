@@ -191,15 +191,31 @@ if (!$tableName) {
     }
 }
 
-// Valid tables
-$validTables = ['provinces', 'municipalities', 'incidents', 'affected', 'assistance', 'evacuation'];
+// Valid tables (CRUD operations only - no views)
+$validTables = [
+    'provinces', 'municipalities', 'incidents', 'affected', 'assistance', 'evacuation', 'logs'
+];
+
+// Read-only tables (logs can only be queried, not modified)
+$readOnlyTables = ['logs'];
 
 if (!in_array($tableName, $validTables)) {
     ob_end_clean();
     http_response_code(400);
     echo json_encode([
         'success' => false,
-        'message' => 'Invalid table name. Valid tables: ' . implode(', ', $validTables)
+        'message' => 'Invalid table name. Valid tables: ' . implode(', ', $validTables) . '. For dashboard views, use backend/dashboard.php'
+    ]);
+    exit();
+}
+
+// Prevent modifications to read-only tables
+if (in_array($tableName, $readOnlyTables) && in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
+    ob_end_clean();
+    http_response_code(403);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Logs table is read-only. Only GET operations are allowed.'
     ]);
     exit();
 }
@@ -379,7 +395,8 @@ function getPrimaryKey($tableName) {
         'incidents' => 'incident_id',
         'affected' => 'affected_id',
         'assistance' => 'id',
-        'evacuation' => 'evacuation_id'
+        'evacuation' => 'evacuation_id',
+        'logs' => 'log_id'
     ];
     return $keys[$tableName] ?? 'id';
 }
