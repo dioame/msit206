@@ -132,6 +132,14 @@
             background: #138496;
         }
 
+        .btn-danger {
+            background: #dc3545;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #c82333;
+        }
+
         .btn-group {
             display: flex;
             gap: 10px;
@@ -279,6 +287,13 @@
                 <button class="btn" id="convertBtn" disabled>Process & Import</button>
             </div>
 
+            <div class="upload-section" style="border-color: #dc3545; background: #fff5f5;">
+                <h2 style="color: #dc3545;">Clear Database</h2>
+                <p style="color: #666; margin: 10px 0;">Remove all data from the database to start fresh with a new upload.</p>
+                <p style="color: #856404; font-size: 12px; margin: 10px 0;"><strong>Warning:</strong> This will permanently delete all data from incidents, provinces, municipalities, affected, assistance, evacuation, and logs tables.</p>
+                <button class="btn btn-danger" id="clearBtn">Clear All Data</button>
+            </div>
+
 
             <div class="loading" id="loading">
                 <p id="loadingText">Processing...</p>
@@ -292,6 +307,7 @@
         const excelFileInput = document.getElementById('excelFile');
         const fileNameDisplay = document.getElementById('fileName');
         const convertBtn = document.getElementById('convertBtn');
+        const clearBtn = document.getElementById('clearBtn');
         const uploadSection = document.getElementById('uploadSection');
         const loading = document.getElementById('loading');
         const loadingText = document.getElementById('loadingText');
@@ -552,6 +568,84 @@
             alert.classList.remove('active');
         }
 
+        // Clear Data button handler
+        clearBtn.addEventListener('click', function() {
+            // Double confirmation
+            const confirm1 = confirm('⚠️ WARNING: This will permanently delete ALL data from the database!\n\nThis includes:\n- All incidents\n- All provinces\n- All municipalities\n- All affected records\n- All assistance records\n- All evacuation records\n- All activity logs\n\nAre you sure you want to continue?');
+            
+            if (!confirm1) {
+                return;
+            }
+            
+            const confirm2 = confirm('⚠️ FINAL CONFIRMATION\n\nThis action cannot be undone. All data will be permanently deleted.\n\nClick OK to proceed with clearing all data.');
+            
+            if (!confirm2) {
+                return;
+            }
+            
+            clearAllData();
+        });
+
+        // Function to clear all database data
+        function clearAllData() {
+            loadingText.textContent = 'Clearing all database data...';
+            loading.classList.add('active');
+            results.classList.remove('active');
+            clearBtn.disabled = true;
+            hideAlert();
+
+            fetch('backend/clear.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.message || 'HTTP error! status: ' + response.status);
+                    }).catch(() => {
+                        throw new Error('HTTP error! status: ' + response.status);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                loading.classList.remove('active');
+                clearBtn.disabled = false;
+
+                if (data.success) {
+                    showAlert(data.message || 'All database data cleared successfully!', 'success');
+                    
+                    // Display results
+                    results.innerHTML = '<h2>Database Cleared</h2>';
+                    const card = document.createElement('div');
+                    card.className = 'result-card success';
+                    card.innerHTML = `
+                        <h3>Clear Operation Complete</h3>
+                        <p><strong>Status:</strong> Success</p>
+                        <p><strong>Tables Cleared:</strong> ${Object.keys(data.results || {}).length}</p>
+                        <ul>
+                            ${Object.keys(data.results || {}).map(table => `<li>${table}</li>`).join('')}
+                        </ul>
+                        <p style="margin-top: 15px; color: #28a745;"><strong>✓ Database is now empty and ready for new data upload.</strong></p>
+                    `;
+                    results.appendChild(card);
+                    results.classList.add('active');
+                } else {
+                    showAlert(data.message || 'Failed to clear database. Please try again.', 'error');
+                    if (data.errors && data.errors.length > 0) {
+                        displayErrors(data.errors);
+                    }
+                }
+            })
+            .catch(error => {
+                loading.classList.remove('active');
+                clearBtn.disabled = false;
+                showAlert('An error occurred: ' + error.message, 'error');
+                console.error('Error:', error);
+            });
+        }
 
     </script>
 </body>

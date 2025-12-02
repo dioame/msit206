@@ -278,7 +278,7 @@
     </nav>
 
     <div class="container">
-        <div class="header">
+        <!-- <div class="header">
             <h1>Association Rule Mining - Apriori Algorithm</h1>
             <p>Discover frequent patterns and associations in assistance item distributions</p>
             <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 4px; font-size: 13px;">
@@ -289,7 +289,7 @@
                     <li><strong>lift:</strong> How much more likely consequent is when antecedent is present vs. overall. >1.2 = positive association.</li>
                 </ul>
             </div>
-        </div>
+        </div> -->
 
         <div class="controls">
             <h3>Mining Parameters</h3>
